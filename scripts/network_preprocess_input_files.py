@@ -17,6 +17,7 @@ import networkx as nx
 import networkx.algorithms.approximation as nxa
 import numpy as np
 import osmnx as ox
+import rtree
 
 from pyproj import Proj, transform
 from rtree import index
@@ -1326,7 +1327,10 @@ def connect_points_to_area(points, areas):
 
     idx_areas = index.Index()
     for idx, area in enumerate(areas):
-        idx_areas.insert(idx, shape(area['geometry']).bounds, area)
+        try:
+            idx_areas.insert(idx, shape(area['geometry']).bounds, area)
+        except rtree.core.RTreeError as ex:
+            print("Warning", ex)
 
     lut_points = {}
     for dest_point in points:
@@ -1346,7 +1350,6 @@ def connect_points_to_area(points, areas):
             point['properties']['connection'] = match[0]['properties']['id']
             linked_points.append(point)
         else:
-            print(point['properties'])
             point['properties']['connection'] = linked_points[-1]['properties']['connection']
             linked_points.append(point)
 
@@ -1783,7 +1786,7 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
         dest_ll = point_feature_to_lat_lng(destination)
         dest_node = ox.get_nearest_node(G, dest_ll)
         dest_id = destination['properties']['id']
-        print("Dest", dest_id)
+        print("Processing steiner tree for dest", dest_id)
 
         origins = [
             point
