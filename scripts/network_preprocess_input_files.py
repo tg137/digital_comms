@@ -1,26 +1,32 @@
-import time
-start = time.time()
-import os
-import sys
-from pprint import pprint
 import configparser
 import csv
-import fiona
-import numpy as np
-import random
 import glob
-
-from shapely.geometry import shape, Point, LineString, Polygon, MultiPolygon, mapping, MultiPoint
-from shapely.ops import unary_union, cascaded_union
-from pyproj import Proj, transform
-from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
-from scipy.spatial import Voronoi, voronoi_plot_2d
-from rtree import index
-from operator import itemgetter
+import os
+import random
+import sys
+import time
 
 from collections import OrderedDict, defaultdict
+from copy import deepcopy
+from operator import itemgetter
+from pprint import pprint
 
-import osmnx as ox, networkx as nx, geopandas as gpd
+import fiona
+import geopandas as gpd
+import networkx as nx
+import networkx.algorithms.approximation as nxa
+import numpy as np
+import osmnx as ox
+
+from pyproj import Proj, transform
+from rtree import index
+from scipy.spatial import Voronoi, voronoi_plot_2d
+from shapely.geometry import shape, Point, LineString, Polygon, MultiPolygon, mapping, MultiPoint
+from shapely.ops import unary_union, cascaded_union
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
+
+
+start = time.time()
 
 CONFIG = configparser.ConfigParser()
 CONFIG.read(os.path.join(os.path.dirname(__file__), 'script_config.ini'))
@@ -1575,9 +1581,7 @@ def estimate_asset_locations_on_road_network(origins, area):
     new_asset_locations = []
 
     try:
-        east, north = transform(projUTM, projWGS84, shape(area['geometry']).bounds[2], shape(area['geometry']).bounds[3])
-        west, south = transform(projUTM, projWGS84, shape(area['geometry']).bounds[0], shape(area['geometry']).bounds[1])
-        G = ox.graph_from_bbox(north, south, east, west, network_type='all', truncate_by_edge=True, retain_all=True)
+        G = get_area_graph(area)
         for origin in origins:
             x_utm, y_utm = tuple(origin['geometry']['coordinates'])
             x_wgs, y_wgs = transform(projUTM, projWGS84, x_utm, y_utm)
@@ -1598,6 +1602,27 @@ def estimate_asset_locations_on_road_network(origins, area):
         new_asset_locations.extend(origins)
 
     return new_asset_locations
+
+
+def get_area_graph(area):
+    projUTM = Proj(init='epsg:27700')
+    projWGS84 = Proj(init='epsg:4326')
+
+    east, north = transform(
+        projUTM, projWGS84,
+        shape(area['geometry']).bounds[2],
+        shape(area['geometry']).bounds[3]
+    )
+    west, south = transform(
+        projUTM, projWGS84,
+        shape(area['geometry']).bounds[0],
+        shape(area['geometry']).bounds[1]
+    )
+    G = ox.graph_from_bbox(
+        north, south, east, west,
+        network_type='all', truncate_by_edge=True, retain_all=True
+    ).to_undirected()
+    return G
 
 
 def snap_point_to_graph_node(point_x, point_y, G):
@@ -1685,9 +1710,7 @@ def generate_link_shortest_path(origin_points, dest_points, area):
     projUTM = Proj(init='epsg:27700')
     projWGS84 = Proj(init='epsg:4326')
 
-    east, north = transform(projUTM, projWGS84, shape(area['geometry']).bounds[2], shape(area['geometry']).bounds[3])
-    west, south = transform(projUTM, projWGS84, shape(area['geometry']).bounds[0], shape(area['geometry']).bounds[1])
-    G = ox.graph_from_bbox(north, south, east, west, network_type='all', truncate_by_edge=True)
+    G = get_area_graph(area)
 
     links = []
 
@@ -1698,23 +1721,16 @@ def generate_link_shortest_path(origin_points, dest_points, area):
             if point['properties']['connection'] == destination['properties']['id']
         ]
 
+        dest_ll = point_feature_to_lat_lng(destination)
+        dest_x, dest_y = destination['geometry']['coordinates']
         for origin in origins:
-            origin_x = origin['geometry']['coordinates'][0]
-            origin_y = origin['geometry']['coordinates'][1]
-            dest_x = destination['geometry']['coordinates'][0]
-            dest_y = destination['geometry']['coordinates'][1]
+            origin_x, origin_y = origin['geometry']['coordinates']
+            origin_ll = point_feature_to_lat_lng(origin)
 
             # Find shortest path between the two
-            point1_x, point1_y = transform(projUTM, projWGS84, origin_x, origin_y)
-            point2_x, point2_y = transform(projUTM, projWGS84, dest_x, dest_y)
-
-            # gotcha: osmnx needs (lng, lat)
-            point1 = (point1_y, point1_x)
-            point2 = (point2_y, point2_x)
-
             # TODO improve by finding nearest edge, routing to/from node at either end
-            origin_node = ox.get_nearest_node(G, point1)
-            destination_node = ox.get_nearest_node(G, point2)
+            origin_node = ox.get_nearest_node(G, origin_ll)
+            destination_node = ox.get_nearest_node(G, dest_ll)
 
             try:
                 if origin_node != destination_node:
@@ -1725,7 +1741,10 @@ def generate_link_shortest_path(origin_points, dest_points, area):
                     routeline = []
                     routeline.append((origin_x, origin_y))
                     for node in route:
-                        routeline.append((transform(projWGS84, projUTM, G.nodes[node]['x'], G.nodes[node]['y'])))
+                        routeline.append(
+                            transform(
+                                projWGS84, projUTM, G.nodes[node]['x'], G.nodes[node]['y'])
+                        )
                     routeline.append((dest_x, dest_y))
                     line = routeline
                 else:
@@ -1748,6 +1767,203 @@ def generate_link_shortest_path(origin_points, dest_points, area):
             })
 
     return links
+
+def generate_link_steiner_tree(origin_points, dest_points, area):
+    ox.config(log_file=False, log_console=False, use_cache=True)
+
+    projUTM = Proj(init='epsg:27700')
+    projWGS84 = Proj(init='epsg:4326')
+
+    G = get_area_graph(area)
+
+    links = []
+    junctions = []
+
+    for destination in dest_points:
+        dest_ll = point_feature_to_lat_lng(destination)
+        dest_node = ox.get_nearest_node(G, dest_ll)
+        dest_id = destination['properties']['id']
+        print("Dest", dest_id)
+
+        origins = [
+            point
+            for point in origin_points
+            if point['properties']['connection'] == dest_id
+        ]
+
+        node_to_points = defaultdict(list)
+        node_to_points[dest_node].append(destination)
+        nodes = [dest_node]
+
+        for point in origins:
+            node = ox.get_nearest_node(G, point_feature_to_lat_lng(point))
+            node_to_points[node].append(point)
+            nodes.append(node)
+
+        # unique nodes
+        nodes = list(set(nodes))
+
+        # workaround steiner_tree handling MultiGraph
+        # tree = nxa.steiner_tree(G, nodes, weight='length')
+        tree = steiner_tree_from_multi_graph(G, nodes, weight='length')
+
+        # DEBUG: dump tree to file
+        # ox.save_load.save_graph_shapefile(tree)
+
+        for node in tree.nodes:
+            node_points = node_to_points[node]
+            node_data = tree.nodes[node]
+            x = node_data['x']
+            y = node_data['y']
+            lng, lat = transform(projWGS84, projUTM, x, y)
+
+            if node_points:
+                for point in node_points:
+                    # add point-node straight line to links
+                    line = [
+                        point['geometry']['coordinates'],
+                        [lng, lat]
+                    ]
+                    links.append({
+                        'type': "Feature",
+                        'geometry': {
+                            "type": "LineString",
+                            "coordinates": line
+                        },
+                        'properties': {
+                            "origin": point['properties']['id'],
+                            "dest": node_data['osmid'],  # use osm id for junction node
+                            "length": LineString(line).length
+                        }
+                    })
+
+            # always add node to junctions
+            junctions.append({
+                'type': "Feature",
+                'geometry': {
+                    "type": "Point",
+                    "coordinates": [lng, lat]
+                },
+                'properties': {
+                    "id": node_data['osmid']
+                }
+            })
+
+        for u, v, k in tree.edges:
+            # use osm id for junction node ids
+            uid = tree.nodes[u]['osmid']
+            vid = tree.nodes[v]['osmid']
+            # add junction-junction edge to links
+            edge = tree.edges[u, v, k]
+            try:
+                geom = mapping(edge['geometry'])
+                coords = geom['coordinates']
+            except KeyError:
+                # stitch straight line together from nodes
+                ux = tree.nodes[u]['x']
+                uy = tree.nodes[u]['y']
+                vx = tree.nodes[v]['x']
+                vy = tree.nodes[v]['y']
+                coords = [ [ux, uy], [vx, vy] ]
+            line = transform_coords(coords, "LineString", projWGS84, projUTM)
+            links.append({
+                'type': "Feature",
+                'geometry': {
+                    "type": "LineString",
+                    "coordinates": line
+                },
+                'properties': {
+                    "origin": uid,
+                    "dest": vid,
+                    "length": LineString(line).length
+                }
+            })
+
+    return links, junctions
+
+
+def steiner_tree_from_multi_graph(G, terminal_nodes, weight):
+    """Hack on nxa.steiner_tree to support multigraph edges
+    - G.edge_subgraph was raising while calling into nxa.filter.show_multiedges, which expects edges to look like (u, v, k),
+    not just (u, v)
+    https://github.com/networkx/networkx/blob/master/networkx/classes/filters.py#L77
+    """
+    from itertools import chain
+    from networkx.utils import pairwise
+
+    # pick largest connected subgraph
+    Gc = max(nx.connected_component_subgraphs(G), key=len)
+
+    M = nxa.metric_closure(Gc, weight=weight)
+    # Use the 'distance' attribute of each edge provided by the metric closure
+    # graph.
+    H = M.subgraph(terminal_nodes)
+    mst_edges = nx.minimum_spanning_edges(H, weight='distance', data=True)
+    # Create an iterator over each edge in each shortest path; repeats are okay
+    links = set(chain.from_iterable(
+        pairwise(d['path'])
+        for u, v, d in mst_edges
+    ))
+
+    multi_edges = []
+    for u, v in links:
+        num_edges = G.number_of_edges(u, v)
+        min_k = 0
+        min_weight = None
+        for k in range(num_edges):
+            curr_weight = G.edges[u, v, k][weight]
+            if min_weight is None:
+                min_weight = curr_weight
+            elif curr_weight < min_weight:
+                min_weight = curr_weight
+                min_k = k
+        multi_edges.append((u, v, min_k))
+
+    T = G.edge_subgraph(multi_edges)
+    return T
+
+
+def point_feature_to_lat_lng(p):
+    lng, lat = transform_coords(p['geometry']['coordinates'], "Point", PROJ_OSGB, PROJ_LL)
+    return (lat, lng)
+
+
+def feature_to_osgb(feature):
+    out = deepcopy(feature)
+    geom_type = feature['geometry']['type']
+    coords = feature['geometry']['coordinates']
+    out['geometry']['coordinates'] = transform_coords(coords, geom_type, PROJ_LL, PROJ_OSGB)
+    return out
+
+
+PROJ_OSGB = Proj(init='epsg:27700')
+PROJ_LL = Proj(init='epsg:4326')
+
+
+def transform_coords(coords, geom_type, proj_from, proj_to):
+    if geom_type == "Point":
+        # (lng, lat)
+        x, y = tuple(coords)
+        osgb = transform(proj_from, proj_to, x, y)
+    elif geom_type == "LineString":
+        # list[(lng, lat)]
+        xs = [c[0] for c in coords]
+        ys = [c[1] for c in coords]
+        txs, tys = transform(proj_from, proj_to, xs, ys)
+        osgb = list(zip(txs, tys))
+    elif geom_type == "Polygon":
+        # list[list[(lng, lat)]]
+        osgb = []
+        for ring in coords:
+            xs = [c[0] for c in ring]
+            ys = [c[1] for c in ring]
+            t_xs, t_ys = transform(proj_from, proj_to, xs, ys)
+            t_ring = list(zip(t_xs, t_ys))
+            osgb.append(t_ring)
+    else:
+        raise NotImplementedError("Geometry type not recognised")
+    return osgb
+
 
 def generate_link_with_nearest(origin_points, dest_points):
 
@@ -2012,7 +2228,7 @@ if __name__ == "__main__":
     geojson_layer5_premises_links = generate_link_straight_line(geojson_layer5_premises, geojson_layer4_distributions)
 
     print('generate links layer 4')
-    geojson_layer4_distributions_links = generate_link_shortest_path(geojson_layer4_distributions, geojson_layer3_cabinets, exchange_area)
+    geojson_layer4_distributions_links, distribution_to_cab_junctions = generate_link_steiner_tree(geojson_layer4_distributions, geojson_layer3_cabinets, exchange_area)
 
     print('generate links layer 3')
     geojson_layer3_cabinets_links = generate_link_shortest_path(geojson_layer3_cabinets, geojson_layer2_exchanges, exchange_area)
