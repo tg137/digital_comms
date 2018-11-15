@@ -1778,6 +1778,7 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
     projWGS84 = Proj(init='epsg:4326')
 
     G = get_area_graph(area)
+    M = metric_closure_from_multi_graph(G, weight='length')
 
     links = []
     junctions = []
@@ -1805,10 +1806,7 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
 
         # unique nodes
         nodes = list(set(nodes))
-
-        # workaround steiner_tree handling MultiGraph
-        # tree = nxa.steiner_tree(G, nodes, weight='length')
-        tree = steiner_tree_from_multi_graph(G, nodes, weight='length')
+        tree = steiner_tree_from_metric_closure(G, M, nodes, weight='length')
 
         # DEBUG: dump tree to file
         # ox.save_load.save_graph_shapefile(tree)
@@ -1885,19 +1883,24 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
     return links, junctions
 
 
-def steiner_tree_from_multi_graph(G, terminal_nodes, weight):
+def metric_closure_from_multi_graph(G, weight):
+    """Generate metric closure from multi graph
+    """
+    # pick largest connected subgraph
+    Gc = max(nx.connected_component_subgraphs(G), key=len)
+    M = nxa.metric_closure(Gc, weight=weight)
+    return M
+
+
+def steiner_tree_from_metric_closure(G, M, terminal_nodes, weight):
     """Hack on nxa.steiner_tree to support multigraph edges
-    - G.edge_subgraph was raising while calling into nxa.filter.show_multiedges, which expects edges to look like (u, v, k),
-    not just (u, v)
+    - G.edge_subgraph was raising while calling into nxa.filter.show_multiedges, which expects
+      edges to look like (u, v, k), not just (u, v)
     https://github.com/networkx/networkx/blob/master/networkx/classes/filters.py#L77
     """
     from itertools import chain
     from networkx.utils import pairwise
 
-    # pick largest connected subgraph
-    Gc = max(nx.connected_component_subgraphs(G), key=len)
-
-    M = nxa.metric_closure(Gc, weight=weight)
     # Use the 'distance' attribute of each edge provided by the metric closure
     # graph.
     H = M.subgraph(terminal_nodes)
