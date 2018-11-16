@@ -19,6 +19,7 @@ import numpy as np
 import osmnx as ox
 import rtree
 
+from pcst_fast import pcst_fast
 from pyproj import Proj, transform
 from rtree import index
 from scipy.spatial import Voronoi, voronoi_plot_2d
@@ -418,20 +419,24 @@ def read_premises_data(exchange_area):
         with open(os.path.join(path), 'r') as system_file:
             reader = csv.reader(system_file)
             next(reader)
-            [premises_data.append({
-                'uid': line[0],
-                'oa': line[1],
-                'gor': line[2],
-                'residential_address_count': line[3],
-                'non_residential_address_count': line[4],
-                'function': line[5],
-                'postgis_geom': line[6],
-                'N': line[7],
-                'E':line[8],
-            })
-                for line in reader
-                if (exchange_bounds[0] <= float(line[8]) and exchange_bounds[1] <= float(line[7]) and exchange_bounds[2] >= float(line[8]) and exchange_bounds[3] >= float(line[7]))
-            ]
+            for line in reader:
+                if (
+                        exchange_bounds[0] <= float(line[8]) and 
+                        exchange_bounds[1] <= float(line[7]) and 
+                        exchange_bounds[2] >= float(line[8]) and 
+                        exchange_bounds[3] >= float(line[7])
+                        ):
+                    premises_data.append({
+                        'uid': line[0],
+                        'oa': line[1],
+                        'gor': line[2],
+                        'residential_address_count': line[3],
+                        'non_residential_address_count': line[4],
+                        'function': line[5],
+                        'postgis_geom': line[6],
+                        'N': line[7],
+                        'E':line[8],
+                    })
 
     # remove 'None' and replace with '0'
     for idx, row in enumerate(premises_data):
@@ -1621,10 +1626,23 @@ def get_area_graph(area):
         shape(area['geometry']).bounds[0],
         shape(area['geometry']).bounds[1]
     )
-    G = ox.graph_from_bbox(
+    M = ox.graph_from_bbox(
         north, south, east, west,
         network_type='all', truncate_by_edge=True, retain_all=True
     ).to_undirected()
+
+    # de-multiplex the graph (retain shortest edges)
+    G = nx.Graph()
+    for u, data in M.nodes(data=True):
+        G.add_node(u, **data)
+    for u, v, data in M.edges(data=True):
+        w = data['length'] if 'length' in data else 1.0
+        if G.has_edge(u,v):
+            if w < G[u][v]['length']:
+                G.add_edge(u, v, **data)
+        else:
+            G.add_edge(u, v, **data)
+
     return G
 
 
@@ -1659,8 +1677,8 @@ def nearest_point_on_line(point, line):
 
 def make_edge_gdf(G):
     edges = []
-    for u, v, key, data in G.edges(keys=True, data=True):
-        edge_details = {'key': key}
+    for u, v, data in G.edges(data=True):
+        edge_details = {}
         # if edge doesn't already have a geometry attribute, create one now
         if 'geometry' not in data:
             point_u = Point((G.nodes[u]['x'], G.nodes[u]['y']))
@@ -1778,7 +1796,31 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
     projWGS84 = Proj(init='epsg:4326')
 
     G = get_area_graph(area)
-    M = metric_closure_from_multi_graph(G, weight='length')
+    
+    # ref nodes
+    node_list = list(G.nodes)
+    node_id_to_idx = {node_id: i for i, node_id in enumerate(node_list)}
+
+    # array of len-2 arrays [[u, v], [u', v'], ...]
+    edges = np.array(list(
+        [node_id_to_idx[u], node_id_to_idx[v]] 
+        for u, v, length in G.edges.data('length')
+    ))
+    
+    # array of edge lengths
+    costs = np.array(list(length for u, v, length in G.edges.data('length')))
+    
+    # root of tree, or -1 for unrooted
+    root = -1  
+    
+    # num dest_points, or one if run once per dest_point
+    num_clusters = 1
+    
+    # pruning method - GW is standard
+    pruning = 'gw'
+
+    # debug output level from pcst_fast
+    verbosity_level = 0
 
     links = []
     junctions = []
@@ -1805,15 +1847,22 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
             nodes.append(node)
 
         # unique nodes
-        nodes = list(set(nodes))
-        tree = steiner_tree_from_metric_closure(G, M, nodes, weight='length')
+        nodes = set(nodes)
+        # array of node prizes, large enough to be worth collecting over edge lengths
+        prizes = np.zeros((len(G.nodes), ))
+        for i, node_id in enumerate(G.nodes):
+            if node_id in nodes:
+                prizes[i] = 1e9  # Pick a large prize value (no guarantee of connection)
+
+        v_idxs, e_idxs = pcst_fast(edges, prizes, costs, root, num_clusters, pruning, verbosity_level)
 
         # DEBUG: dump tree to file
         # ox.save_load.save_graph_shapefile(tree)
 
-        for node in tree.nodes:
+        for v_idx in v_idxs:
+            node = node_list[v_idx]
             node_points = node_to_points[node]
-            node_data = tree.nodes[node]
+            node_data = G.nodes[node]
             x = node_data['x']
             y = node_data['y']
             lng, lat = transform(projWGS84, projUTM, x, y)
@@ -1833,7 +1882,7 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
                         },
                         'properties': {
                             "origin": point['properties']['id'],
-                            "dest": node_data['osmid'],  # use osm id for junction node
+                            "dest": str(node_data['osmid']),  # use osm id for junction node
                             "length": LineString(line).length
                         }
                     })
@@ -1846,25 +1895,29 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
                     "coordinates": [lng, lat]
                 },
                 'properties': {
-                    "id": node_data['osmid']
+                    "id": str(node_data['osmid'])
                 }
             })
 
-        for u, v, k in tree.edges:
+        for e_idx in e_idxs:
+            u_idx, v_idx = edges[e_idx] 
+            u = node_list[u_idx]
+            v = node_list[v_idx]
+
             # use osm id for junction node ids
-            uid = tree.nodes[u]['osmid']
-            vid = tree.nodes[v]['osmid']
+            uid = G.nodes[u]['osmid']
+            vid = G.nodes[v]['osmid']
             # add junction-junction edge to links
-            edge = tree.edges[u, v, k]
+            edge = G.edges[u, v]
             try:
                 geom = mapping(edge['geometry'])
                 coords = geom['coordinates']
             except KeyError:
                 # stitch straight line together from nodes
-                ux = tree.nodes[u]['x']
-                uy = tree.nodes[u]['y']
-                vx = tree.nodes[v]['x']
-                vy = tree.nodes[v]['y']
+                ux = G.nodes[u]['x']
+                uy = G.nodes[u]['y']
+                vx = G.nodes[v]['x']
+                vy = G.nodes[v]['y']
                 coords = [ [ux, uy], [vx, vy] ]
             line = transform_coords(coords, "LineString", projWGS84, projUTM)
             links.append({
@@ -2029,7 +2082,8 @@ def write_shapefile(data, exchange_name, filename):
     print(os.path.join(directory, filename))
     # Write all elements to output file
     with fiona.open(os.path.join(directory, filename), 'w', driver=sink_driver, crs=sink_crs, schema=sink_schema) as sink:
-        [sink.write(feature) for feature in data]
+        for feature in data:
+            sink.write(feature)
 
 def csv_writer(data, filename, fieldnames):
     """
@@ -2290,6 +2344,9 @@ if __name__ == "__main__":
 
     print('write distribution points')
     write_shapefile(geojson_layer4_distributions,  exchange_name, 'assets_layer4_distributions.shp')
+
+    print('write cab-distribution junctions')
+    write_shapefile(distribution_to_cab_junctions,  exchange_name, 'assets_layer3-4_junctions.shp')
 
     print('write cabinets')
     write_shapefile(geojson_layer3_cabinets,  exchange_name, 'assets_layer3_cabinets.shp')
