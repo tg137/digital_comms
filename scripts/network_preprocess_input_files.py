@@ -1796,6 +1796,8 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
     projWGS84 = Proj(init='epsg:4326')
 
     G = get_area_graph(area)
+
+    # TODO split road network graph at points nearest origin_points
     
     # ref nodes
     node_list = list(G.nodes)
@@ -1831,6 +1833,7 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
         dest_id = destination['properties']['id']
         print("Processing steiner tree for dest", dest_id)
 
+        # TODO revisit in light of graph-splitting above
         origins = [
             point
             for point in origin_points
@@ -1852,12 +1855,10 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
         prizes = np.zeros((len(G.nodes), ))
         for i, node_id in enumerate(G.nodes):
             if node_id in nodes:
-                prizes[i] = 1e9  # Pick a large prize value (no guarantee of connection)
+                prizes[i] = 1e15  # Pick a large prize value (no guarantee of connection)
 
+        # calculate steiner tree
         v_idxs, e_idxs = pcst_fast(edges, prizes, costs, root, num_clusters, pruning, verbosity_level)
-
-        # DEBUG: dump tree to file
-        # ox.save_load.save_graph_shapefile(tree)
 
         for v_idx in v_idxs:
             node = node_list[v_idx]
@@ -1932,6 +1933,8 @@ def generate_link_steiner_tree(origin_points, dest_points, area):
                     "length": LineString(line).length
                 }
             })
+
+        # TODO link skipped nodes to tree (BFS?)
 
     return links, junctions
 
