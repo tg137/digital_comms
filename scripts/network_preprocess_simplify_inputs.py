@@ -246,9 +246,24 @@ def read_exchange_areas():
     * id: 'string'
         Unique exchange id
     """
+    exchange_areas = []
 
-    with fiona.open(os.path.join(DATA_RAW_SHAPES, 'all_exchange_areas', '_exchange_areas.shp'), 'r') as source:
-        return [feature for feature in source]
+    with fiona.open(
+        os.path.join(
+            DATA_RAW_SHAPES, 'all_exchange_areas', '_exchange_areas.shp')
+            , 'r'
+            ) as source:
+            for feature in source:
+                new_id = feature['properties']['id'].replace('/','')
+                exchange_areas.append({
+                    'type': feature['type'],
+                    'geometry': feature['geometry'],
+                    'properties':{
+                        'id': new_id
+                    }
+                })
+
+            return exchange_areas
 
 def load_exchange_properties():
     """Read all exchange properties data
@@ -335,7 +350,7 @@ def write_shapefile(data, directory, id):
         os.makedirs(folder_directory)
 
     for area in data:
-        filename = area['properties'][id]
+        filename = area['properties'][id].replace('/', '')
         # Write all elements to output file
         with fiona.open(os.path.join(folder_directory, filename + '.shp'), 'w', driver=sink_driver, crs=sink_crs, schema=sink_schema) as sink:
             sink.write(area)
@@ -621,7 +636,6 @@ def get_lad_area_ids(exchange_name):
 
 def read_premises_data(exchange_area):
 
-    #prepare exchange_area polygon
     prepared_area = prep(shape(exchange_area['geometry']))
 
     lads = get_lad_area_ids(exchange_area['properties']['id'].replace("/", ""))
@@ -634,7 +648,6 @@ def read_premises_data(exchange_area):
             for path in pathlist:
                 with open(path, 'r') as system_file:
                     reader = csv.DictReader(system_file)
-                    next(reader)
                     for line in reader:
                         geom = loads(line['geom'])
                         geom_point = geom.representative_point()
@@ -657,7 +670,6 @@ def read_premises_data(exchange_area):
     output = []
 
     try:
-        # create index from generator (see http://toblerity.org/rtree/performance.html#use-stream-loading)
         idx = index.Index(premises())
 
         for n in idx.intersection((shape(exchange_area['geometry']).bounds), objects=True):
@@ -695,17 +707,15 @@ def read_premises_by_exchange(exchange_areas):
     for exchange in exchange_areas:
         exchange_id = exchange['properties']['id'].replace("/", "")
         PATH = os.path.join(DATA_INTERMEDIATE, 'premises_by_exchange', exchange_id + '.shp')
-
         if not os.path.isfile(PATH):
-
             premises = read_premises_data(exchange)
-
+            print('prems {} {}'.format(len(premises), exchange_id))
             if len(premises) > 0:
                 write_premises_shapefile(premises, PATH)
             else:
                 print('{} was empty'.format(exchange_id))
         else:
-            print('{} already exists'.format(exchange_id))
+            continue
 
     return print('complete')
 
@@ -795,8 +805,10 @@ def get_oa_to_exchange_lut(exchange_areas):
     """
 
     unique_lad_to_oa_lut = defaultdict(set)
+    missing_exchanges = []
 
     for exchange in exchange_areas:
+
         exchange_id = exchange['properties']['id']
         PATH = os.path.join(DATA_INTERMEDIATE, 'premises_by_exchange', exchange_id + '.shp')
 
@@ -804,7 +816,10 @@ def get_oa_to_exchange_lut(exchange_areas):
             premises = read_premises(PATH)
             for premise in premises:
                 unique_lad_to_oa_lut[exchange_id].add(premise['properties']['oa'])
+
         else:
+            print('could not find {}'.format(os.path.basename(PATH)))
+            missing_exchanges.append(exchange)
             pass
 
     output_lut = defaultdict(list)
@@ -817,7 +832,7 @@ def get_oa_to_exchange_lut(exchange_areas):
         for value in output_values:
             output_lut[key].append(value)
 
-    return output_lut
+    return output_lut, missing_exchanges
 
 #####################################################################################
 # Write out data
@@ -826,8 +841,8 @@ def get_oa_to_exchange_lut(exchange_areas):
 def write_to_csv(data, folder, file_prefix, fieldnames):
     """
     Write data to a CSV file path
-    """
 
+    """
     # Create path
     directory = os.path.join(DATA_INTERMEDIATE, folder)
     if not os.path.exists(directory):
@@ -861,6 +876,7 @@ def write_to_csv(data, folder, file_prefix, fieldnames):
 
 # # 3) add necessary properties (postcode) to exchange polygons
 exchange_areas = read_exchange_areas()
+
 # exchange_properties = load_exchange_properties()
 # exchange_areas = add_properties_to_exchanges(exchange_areas, exchange_properties)
 # write_shapefile(exchange_areas, 'individual_exchange_areas', 'id')
@@ -892,18 +908,52 @@ exchange_areas = read_exchange_areas()
 # write_to_csv(lut, 'lut_exchange_to_lad', 'ex_to_lad_', fieldnames)
 # write_shapefile(lad_areas, 'individual_lad_areas', 'name')
 
+# 8) get premises by exchange
+
+# def yield_single_exchange(exchange_id):
+
+#     for exchange in exchange_areas:
+#         if exchange['properties']['id'] == exchange_id:
+#             yield exchange
+
 # # 8) read premises by exchange and export
 read_premises_by_exchange(exchange_areas)
 
-# 9) find problem exchanges and export
-problem_exchanges = find_problem_exchanges(exchange_areas)
-fieldnames = ['problem_exchange']
-write_to_csv(problem_exchanges, 'problem_exchanges', '', fieldnames)
-problem_exchange_shapes = get_problem_exchange_shapes(exchange_areas, problem_exchanges)
-PC_OUT_PATH = os.path.join(DATA_INTERMEDIATE, 'problem_exchanges', 'problem_exchanges_2.shp')
-write_single_exchange_shapefile(problem_exchange_shapes, PC_OUT_PATH)
+# # 9) find problem exchanges and export
+# problem_exchanges = find_problem_exchanges(exchange_areas)
+# print(problem_exchanges)
+# fieldnames = ['problem_exchange']
+# write_to_csv(problem_exchanges, 'problem_exchanges', '', fieldnames)
+# problem_exchange_shapes = get_problem_exchange_shapes(exchange_areas, problem_exchanges)
+# PC_OUT_PATH = os.path.join(DATA_INTERMEDIATE, 'problem_exchanges', 'problem_exchanges_2.shp')
+# write_single_exchange_shapefile(problem_exchange_shapes, PC_OUT_PATH)
 
 # # 10) get OA to exchange LUT and export
-# oa_to_ex_lut = get_oa_to_exchange_lut(exchange_areas)
-# fieldnames = ['oa']
-# write_to_csv(oa_to_ex_lut, 'oa_to_ex_lut', '', fieldnames)
+# oa_to_ex_lut, missing_exchanges = get_oa_to_exchange_lut(exchange_areas)
+# # fieldnames = ['oa']
+# # write_to_csv(oa_to_ex_lut, 'oa_to_ex_lut', '', fieldnames)
+# write_shapefile(missing_exchanges, 'missing_exchanges', 'id')
+# # fieldnames = ['missing_exchanges']
+# # write_to_csv(missing_exchanges, 'missing_exchanges', '', fieldnames)
+
+# residential = []
+
+# def premises():
+#     total = 0
+#     residential = 0
+#     directory = os.path.join(DATA_BUILDING_DATA, 'prems_by_lad', 'S12000017')
+#     pathlist = glob.iglob(directory + '/*.csv', recursive=True)
+#     for path in pathlist:
+#         with open(path, 'r') as system_file:
+#             reader = csv.DictReader(system_file)
+#             for line in reader:
+#                 total += 1
+#                 if line['building_use'] == 'residential':
+#                     residential += 1
+#                 else:
+#                     pass
+
+#     print(total)
+#     print(index)
+
+# premises()
