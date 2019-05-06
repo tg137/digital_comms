@@ -365,30 +365,71 @@ def write_shapefile(data, directory, id):
 
 e.g. run after a dissolve operation:
     ogr2ogr output.shp postcode_sectors.shp -dialect sqlite \
-        -sql "SELECT ST_Union(geometry), pc_area FROM _postcode_sectors GROUP BY pc_area"
+        -sql "SELECT ST_Union(geometry), postcode_area FROM _postcode_sectors \
+            GROUP BY postcode_area"
 """
 
 def read_postcode_sectors(path):
-    """Read all shapes
+    """
+    Read all shapes
 
     Yields
     ------
     postcode_areas : iterable[dict]
+
     """
-    dirname = os.path.join(DATA_RAW_SHAPES, 'postcode_sectors')
-    pathlist = glob.iglob(dirname + '/*.shp', recursive=True)
+    with fiona.open(path, 'r') as source:
+        for feature in source:
+            #if feature['properties']['postcode'].startswith('CB'):
+            yield feature
 
-    for path in pathlist:
-        with fiona.open(path, 'r') as source:
-            for feature in source:
-                yield feature
+# def postcode_sector_area(path):
+#     """
+#     Read .csv with postcode sector areas (m^2)
 
-def generate_postcode_areas(data):
-    """Create postcode area polygons using postcode sectors.
+#     """
+#     area_data = []
+
+#     directory = os.path.dirname(os.path.abspath(path))
+#     csv_path = os.path.join(directory, 'postcode_sectors_area.csv')
+
+#     with open(csv_path, 'r') as source:
+#         reader = csv.DictReader(source)
+#         for feature in reader:
+#             print(feature)
+#             area_data.append({
+#                 'postcode': feature['postcode'],
+#                 'area': ['area'],
+#             })
+
+#     output = []
+
+#     for area in area_data:
+#         first_two_characters = area['postcode'][2:]
+#         postcode_area = ''.join([i for i in first_two_characters if not i.isdigit()])
+#         interim_data = []
+#         for second_area in area_data:
+#             if second_area.startswith(postcode_area):
+#                 interim_data.append(second_area['area'])
+#         mean = mean(interim_data)
+#         minimum = min(interim_data)
+#         output.append({
+#             'postcode_area': postcode_area,
+#             'mean': mean,
+#             'minimum': minimum,
+#         })
+
+#     return output
+
+
+def generate_postcode_areas(data, min_area, special_areas):
+    """
+    Create postcode area polygons using postcode sectors.
 
     - Gets the postcode area by cutting the first two characters of the postcode.
     - Numbers are then removed to leave just the postcode area character(s).
     - Polygons are then dissolved on this variable
+
     """
     def get_postcode_area(feature):
         postcode = feature['properties']['postcode']
@@ -397,30 +438,55 @@ def generate_postcode_areas(data):
             return match.group(0)
 
     for key, group in itertools.groupby(data, key=get_postcode_area):
+        # print(key)
+        # print(special_areas)
+        if key not in special_areas:
+            threshold = min_area
+        else:
+            threshold = 1e6
+
+        # print(key)
         buffer_distance = 0.001
-        geom = unary_union([
-            shape(feature['geometry']).buffer(buffer_distance) for feature in group])
+        geoms = [shape(feature['geometry']) for feature in group]
+
+        # total_area = sum([geom.area for geom in geoms])/10e6
+        # print(total_area)
+
+        # print(len(geoms))
+        geoms = [geom for geom in geoms if geom.area > threshold]
+        # print(len(geoms))
+        buffered = [geom.buffer(buffer_distance) for geom in geoms]
+        # print(len(buffered))
+        geom = unary_union(buffered)
+        # print('done union')
         yield {
             'type': "Feature",
             'geometry': mapping(geom),
             'properties': {
-                'pc_area': key
+                'postcode_area': key
             }
         }
 
-def fix_up(data, threshold_area):
-    """Dissolve/buffer
+def fix_up(feature, threshold_area, special_areas):
     """
-    for feature in data:
-        geom = shape(feature['geometry'])
-        geom = drop_small_multipolygon_parts(geom, threshold_area)
-        geom = drop_holes(geom)
-        yield {
-            'type': "Feature",
-            'geometry': mapping(geom),
-            'properties': feature['properties']
-        }
+    Dissolve/buffer
 
+    """
+    geom = shape(feature['geometry'])
+    if feature['properties']['postcode_area'] not in special_areas:
+        threshold = threshold_area
+    else:
+        threshold = 1e6
+    geom = drop_small_multipolygon_parts(geom, threshold)
+    geom = drop_holes(geom)
+    if geom.type != 'MultiPolygon':
+        geom = MultiPolygon([geom])
+
+    return {
+        'type': "Feature",
+        'geometry': mapping(geom),
+        'properties': feature['properties']
+    }
 
 def drop_small_multipolygon_parts(geom, threshold_area):
     if geom.type == 'MultiPolygon':
@@ -452,8 +518,8 @@ def get_fiona_type(value):
     return None
 
 
-def write_single_shapefile(data, path):
-    first_data_item = next(data)
+def write_single_shapefile(feature, directory):
+    first_data_item = feature
 
     prop_schema = []
     for name, value in first_data_item['properties'].items():
@@ -467,10 +533,51 @@ def write_single_shapefile(data, path):
         'properties': OrderedDict(prop_schema)
     }
 
+    # Create path
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    name = first_data_item['properties']['postcode_area']
+    path = os.path.join(directory, name.lower() + '.shp')
+
     with fiona.open(path, 'w', driver=driver, crs=crs, schema=schema) as sink:
         sink.write(first_data_item)
-        for feature in tqdm(data):
-            sink.write(feature)
+
+def run_postcode_area_generation():
+    """
+    Generates postcode areas from postcode sectors.
+
+    MIN_AREA helps to remove smaller areas first, to speed up processing. However,
+    Central East London won't process if it's set too large.
+
+    MIN_AREA = 1e7 works well for everywhere except EC, HA, N, NW, SE, SM, SW, W, WC
+    MIN_AREA = 1e2 works well for EC, HA, N, NW, SE, SM, SW, W, WC.
+
+    """
+    min_area_small_areas = [
+        'EC',
+        'HA',
+        'N',
+        'NW',
+        'SE',
+        'SM',
+        'SW',
+        'W',
+        'WC',
+    ]
+
+    MIN_AREA = 1e6  # 10km^2
+
+    PC_PATH = os.path.join(DATA_RAW_SHAPES,'postcode_sectors', '_postcode_sectors.shp')
+    PC_OUT_PATH = os.path.join(DATA_RAW_SHAPES, 'postcode_areas')
+
+    PC_SECTORS = read_postcode_sectors(PC_PATH)
+    # area_stats_postcode_area = postcode_sector_area(PC_PATH)
+    # print(area_stats_postcode_area)
+    pc_sectors_by_area = generate_postcode_areas(PC_SECTORS, MIN_AREA, min_area_small_areas)
+
+    for pc_area_feature in tqdm(pc_sectors_by_area):
+        PC_AREA = fix_up(pc_area_feature, MIN_AREA, min_area_small_areas)
+        write_single_shapefile(PC_AREA, PC_OUT_PATH)
 
 #####################################################################################
 # 5) remove verticals from postcode areas and write out individually
@@ -556,18 +663,26 @@ def remove_verticals(path):
 #####################################################################################
 
 def read_postcode_areas():
-    with fiona.open(os.path.join(DATA_RAW_SHAPES, 'postcode_areas', '_postcode_areas.shp'), 'r') as source:
-        return [area for area in source]
+
+    directory = os.path.join(DATA_RAW_SHAPES, 'postcode_areas')
+    pathlist = glob.iglob(os.path.join(directory + '/*.shp'), recursive=True)
+
+    for path in pathlist:
+        with fiona.open(path, 'r') as source:
+            for feature in source:
+                yield feature
 
 def intersect_pcd_areas_and_exchanges(exchanges, areas):
 
     exchange_to_pcd_area_lut = defaultdict(list)
 
-    # Initialze Rtree
-    idx = index.Index()
-    [idx.insert(0, shape(exchange['geometry']).bounds, exchange) for exchange in exchanges]
+    idx = index.Index(
+        (i, shape(exchange['geometry']).bounds, exchange)
+        for i, exchange in enumerate(exchanges)
+    )
 
     for area in areas:
+        print(area['properties'])
         for n in idx.intersection((shape(area['geometry']).bounds), objects=True):
             area_shape = shape(area['geometry'])
             exchange_shape = shape(n.object['geometry'])
@@ -717,7 +832,7 @@ def read_premises_by_exchange(exchange_areas):
         else:
             continue
 
-    return print('complete')
+    return print('completed read_premises_by_exchange')
 
 #####################################################################################
 # 9) find problem exchanges and export
@@ -733,13 +848,15 @@ def find_problem_exchanges(exchange_areas):
         PATH = os.path.join(DATA_INTERMEDIATE, 'premises_by_exchange', exchange_id + '.shp')
 
         if not os.path.isfile(PATH):
-
-            missing.append({
-                'problem_exchange': exchange_id
-                })
-
+            try:
+                missing.append({
+                    'problem_exchange': exchange_id
+                    })
+            except:
+                print('problem with {}'.format(exchange_id))
         else:
             pass
+    print('completed find_problem_exchanges')
 
     missing_output = defaultdict(list)
 
@@ -801,9 +918,10 @@ def read_premises(path):
             yield feature
 
 def get_oa_to_exchange_lut(exchange_areas):
-    """get a set of Ouput Areas by Exchange Area
     """
+    Get a set of Ouput Areas by Exchange Area
 
+    """
     unique_lad_to_oa_lut = defaultdict(set)
     missing_exchanges = []
 
@@ -832,6 +950,8 @@ def get_oa_to_exchange_lut(exchange_areas):
         for value in output_values:
             output_lut[key].append(value)
 
+    print('completed get_oa_to_exchange_lut')
+
     return output_lut, missing_exchanges
 
 #####################################################################################
@@ -848,17 +968,19 @@ def write_to_csv(data, folder, file_prefix, fieldnames):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    for key, value in data.items():
-        print('finding prem data for {}'.format(key))
-        filename = key.replace("/", "")
+    try:
+        for key, value in data.items():
+            print('finding prem data for {}'.format(key))
+            filename = key.replace("/", "")
 
-        if len(value) > 0:
-            with open(os.path.join(directory, file_prefix + filename + '.csv'), 'w') as csv_file:
-                writer = csv.DictWriter(csv_file, fieldnames, lineterminator = '\n')
-                writer.writerows(value)
-        else:
-            pass
-
+            if len(value) > 0:
+                with open(os.path.join(directory, file_prefix + filename + '.csv'), 'w') as csv_file:
+                    writer = csv.DictWriter(csv_file, fieldnames, lineterminator = '\n')
+                    writer.writerows(value)
+            else:
+                pass
+    except:
+        print('problem writing {}'.format(folder))
 ###############################################################################
 
 # #Run functions
@@ -881,14 +1003,8 @@ exchange_areas = read_exchange_areas()
 # exchange_areas = add_properties_to_exchanges(exchange_areas, exchange_properties)
 # write_shapefile(exchange_areas, 'individual_exchange_areas', 'id')
 
-# # 4) generate single set of postcode areas from postcode sectors
-# PC_PATH = os.path.join(DATA_RAW_SHAPES,'postcode_sectors', '_postcode_sectors.shp')
-# PC_SECTORS = read_postcode_sectors(PC_PATH)
-# PC_AREAS = generate_postcode_areas(PC_SECTORS)
-# MIN_AREA = 1e6  # 1km^2
-# PC_AREAS = fix_up(PC_AREAS, MIN_AREA)
-# PC_OUT_PATH = os.path.join(DATA_RAW_SHAPES,'postcode_areas', 'postcode_areas.shp')
-# write_single_shapefile(PC_AREAS, PC_OUT_PATH)
+# 4) generate single set of postcode areas from postcode sectors
+run_postcode_area_generation()
 
 # # 5) remove verticals from postcode areas and write out individually
 # for path in pathlist:
@@ -916,12 +1032,11 @@ exchange_areas = read_exchange_areas()
 #         if exchange['properties']['id'] == exchange_id:
 #             yield exchange
 
-# # 8) read premises by exchange and export
-read_premises_by_exchange(exchange_areas)
+# # # 8) read premises by exchange and export
+# read_premises_by_exchange(exchange_areas)
 
 # # 9) find problem exchanges and export
 # problem_exchanges = find_problem_exchanges(exchange_areas)
-# print(problem_exchanges)
 # fieldnames = ['problem_exchange']
 # write_to_csv(problem_exchanges, 'problem_exchanges', '', fieldnames)
 # problem_exchange_shapes = get_problem_exchange_shapes(exchange_areas, problem_exchanges)
@@ -930,30 +1045,8 @@ read_premises_by_exchange(exchange_areas)
 
 # # 10) get OA to exchange LUT and export
 # oa_to_ex_lut, missing_exchanges = get_oa_to_exchange_lut(exchange_areas)
-# # fieldnames = ['oa']
-# # write_to_csv(oa_to_ex_lut, 'oa_to_ex_lut', '', fieldnames)
+# fieldnames = ['oa']
+# write_to_csv(oa_to_ex_lut, 'oa_to_ex_lut', '', fieldnames)
 # write_shapefile(missing_exchanges, 'missing_exchanges', 'id')
-# # fieldnames = ['missing_exchanges']
-# # write_to_csv(missing_exchanges, 'missing_exchanges', '', fieldnames)
-
-# residential = []
-
-# def premises():
-#     total = 0
-#     residential = 0
-#     directory = os.path.join(DATA_BUILDING_DATA, 'prems_by_lad', 'S12000017')
-#     pathlist = glob.iglob(directory + '/*.csv', recursive=True)
-#     for path in pathlist:
-#         with open(path, 'r') as system_file:
-#             reader = csv.DictReader(system_file)
-#             for line in reader:
-#                 total += 1
-#                 if line['building_use'] == 'residential':
-#                     residential += 1
-#                 else:
-#                     pass
-
-#     print(total)
-#     print(index)
-
-# premises()
+# fieldnames = ['missing_exchanges']
+# write_to_csv(missing_exchanges, 'missing_exchanges', '', fieldnames)

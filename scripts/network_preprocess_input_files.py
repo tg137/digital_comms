@@ -102,9 +102,11 @@ def read_premises_data(exchange_area):
     def premises():
         i = 0
         for lad in lad_areas:
+            print(lad)
             directory = os.path.join(DATA_BUILDING_DATA, 'prems_by_lad', lad)
             pathlist = glob.iglob(directory + '/*.csv', recursive=True)
             for path in pathlist:
+                print(path)
                 if os.path.isfile(PATH):
                     for oa in lower_areas:
                         if os.path.basename(path[:-4]) == oa:
@@ -1553,222 +1555,222 @@ if __name__ == "__main__":
     print('Read exchange area')
     exchange_area = read_exchange_area(exchange_name)
 
-    print('Reading premises data')
-    premises = read_premises_data(exchange_area)
+#     print('Reading premises data')
+#     premises = read_premises_data(exchange_area)
 
-    print('Read exchanges')
-    exchange = read_exchanges(exchange_area)
+#     print('Read exchanges')
+#     exchange = read_exchanges(exchange_area)
 
-    print('Read postcode_areas')
-    geojson_postcode_areas = read_postcode_areas(exchange_area)
+#     print('Read postcode_areas')
+#     geojson_postcode_areas = read_postcode_areas(exchange_area)
 
-    ##########################################################################################
-    ### IMPORT SUPPLEMETARY DATA AND PROCESS
-    print('Read pcd_to_exchange_lut')
-    lut_pcd_to_exchange = read_pcd_to_exchange_lut(exchange_abbr)
+#     ##########################################################################################
+#     ### IMPORT SUPPLEMETARY DATA AND PROCESS
+#     print('Read pcd_to_exchange_lut')
+#     lut_pcd_to_exchange = read_pcd_to_exchange_lut(exchange_abbr)
 
-    print('Read pcd_to_cabinet_lut')
-    lut_pcd_to_cabinet = read_pcd_to_cabinet_lut(exchange_abbr)
+#     print('Read pcd_to_cabinet_lut')
+#     lut_pcd_to_cabinet = read_pcd_to_cabinet_lut(exchange_abbr)
 
-    print('Read pcd_technology_lut')
-    lut_pcd_technology = read_postcode_technology_lut(exchange_abbr)
+#     print('Read pcd_technology_lut')
+#     lut_pcd_technology = read_postcode_technology_lut(exchange_abbr)
 
-    ##########################################################################################
-    # Process/Estimate network hierarchy
-    print('Add exchange id to postcode areas')
-    geojson_postcode_areas = add_exchange_id_to_postcode_areas(
-        exchange_area, geojson_postcode_areas, lut_pcd_to_exchange
-        )
+#     ##########################################################################################
+#     # Process/Estimate network hierarchy
+#     print('Add exchange id to postcode areas')
+#     geojson_postcode_areas = add_exchange_id_to_postcode_areas(
+#         exchange_area, geojson_postcode_areas, lut_pcd_to_exchange
+#         )
 
-    print('Add cabinet id to postcode areas')
-    geojson_postcode_areas = add_cabinet_id_to_postcode_areas(
-        geojson_postcode_areas, lut_pcd_to_cabinet
-        )
+#     print('Add cabinet id to postcode areas')
+#     geojson_postcode_areas = add_cabinet_id_to_postcode_areas(
+#         geojson_postcode_areas, lut_pcd_to_cabinet
+#         )
 
-    print('Add postcode to premises')
-    premises = add_postcode_to_premises(premises, geojson_postcode_areas)
+#     print('Add postcode to premises')
+#     premises = add_postcode_to_premises(premises, geojson_postcode_areas)
 
-    ##########################################################################################
-    ### Process/Estimate assets
-    print('complement cabinet locations as expected for this geotype')
-    cabinets = complement_postcode_cabinets(
-        premises, exchange_area, geojson_postcode_areas, exchange_abbr
-        )
+#     ##########################################################################################
+#     ### Process/Estimate assets
+#     print('complement cabinet locations as expected for this geotype')
+#     cabinets = complement_postcode_cabinets(
+#         premises, exchange_area, geojson_postcode_areas, exchange_abbr
+#         )
 
-    print('allocating cabinet to premises')
-    premises = allocate_to_cabinet(premises, cabinets)
+#     print('allocating cabinet to premises')
+#     premises = allocate_to_cabinet(premises, cabinets)
 
-    print('allocating cabinet to pcd_areas')
-    geojson_postcode_areas = allocate_to_cabinet(geojson_postcode_areas, cabinets)
+#     print('allocating cabinet to pcd_areas')
+#     geojson_postcode_areas = allocate_to_cabinet(geojson_postcode_areas, cabinets)
 
-    print('estimate cabinet locations')
-    cabinets = estimate_cabinet_locations(premises)
+#     print('estimate cabinet locations')
+#     cabinets = estimate_cabinet_locations(premises)
 
-    print('estimate cabinet locations on road network')
-    cabinets = estimate_asset_locations_on_road_network(cabinets, exchange_area)
+#     print('estimate cabinet locations on road network')
+#     cabinets = estimate_asset_locations_on_road_network(cabinets, exchange_area)
 
-    print('estimate location of distribution points')
-    distributions = estimate_dist_points(premises, exchange_abbr)
+#     print('estimate location of distribution points')
+#     distributions = estimate_dist_points(premises, exchange_abbr)
 
-    print('estimate dist points on road network')
-    distributions = estimate_asset_locations_on_road_network(distributions, exchange_area)
+#     print('estimate dist points on road network')
+#     distributions = estimate_asset_locations_on_road_network(distributions, exchange_area)
 
-    # Process/Estimate boundaries
-    print('generate cabinet areas')
-    geojson_cabinet_areas = generate_voronoi_areas(cabinets, geojson_postcode_areas)
+#     # Process/Estimate boundaries
+#     print('generate cabinet areas')
+#     geojson_cabinet_areas = generate_voronoi_areas(cabinets, geojson_postcode_areas)
 
-    print('generate distribution areas')
-    geojson_distribution_areas = generate_voronoi_areas(distributions, geojson_postcode_areas)
+#     print('generate distribution areas')
+#     geojson_distribution_areas = generate_voronoi_areas(distributions, geojson_postcode_areas)
 
-    print('generate exchange areas')
-    geojson_exchange_areas = generate_exchange_area(geojson_postcode_areas)
+#     print('generate exchange areas')
+#     geojson_exchange_areas = generate_exchange_area(geojson_postcode_areas)
 
-    ##########################################################################################
-    # Connect assets
-    print('connect premises to distributions')
-    premises = connect_points_to_area(premises, geojson_distribution_areas)
+#     ##########################################################################################
+#     # Connect assets
+#     print('connect premises to distributions')
+#     premises = connect_points_to_area(premises, geojson_distribution_areas)
 
-    print('connect distributions to cabinets')
-    distributions = connect_points_to_area(distributions, geojson_cabinet_areas)
+#     print('connect distributions to cabinets')
+#     distributions = connect_points_to_area(distributions, geojson_cabinet_areas)
 
-    print('connect cabinets to exchanges')
-    cabinets = connect_points_to_area(cabinets, geojson_exchange_areas)
+#     print('connect cabinets to exchanges')
+#     cabinets = connect_points_to_area(cabinets, geojson_exchange_areas)
 
-    # ########################################################################################
-    # ## Process/Estimate links
-    # print('generate shortest path links layer 5')
-    # premises_sp_links = generate_link_shortest_path(
-    # premises, distributions, exchange_area
-    # )
+#     # ########################################################################################
+#     # ## Process/Estimate links
+#     # print('generate shortest path links layer 5')
+#     # premises_sp_links = generate_link_shortest_path(
+#     # premises, distributions, exchange_area
+#     # )
 
-    # print('generate shortest path links layer 4')
-    # distributions_sp_links = generate_link_shortest_path(
-    # distributions, cabinets, exchange_area
-    # )
+#     # print('generate shortest path links layer 4')
+#     # distributions_sp_links = generate_link_shortest_path(
+#     # distributions, cabinets, exchange_area
+#     # )
 
-    # print('generate shortest path links layer 3')
-    # cabinets_sp_links = generate_link_shortest_path(cabinets, exchange, exchange_area)
+#     # print('generate shortest path links layer 3')
+#     # cabinets_sp_links = generate_link_shortest_path(cabinets, exchange, exchange_area)
 
-    print('generate straight line links layer 5')
-    premises_sl_links = generate_link_straight_line(premises, distributions)
+#     print('generate straight line links layer 5')
+#     premises_sl_links = generate_link_straight_line(premises, distributions)
 
-    print('generate straight line links layer 4')
-    cabinets_sl_links = generate_link_straight_line(distributions, cabinets)
+#     print('generate straight line links layer 4')
+#     cabinets_sl_links = generate_link_straight_line(distributions, cabinets)
 
-    print('generate straight line links layer 3')
-    exchange_sl_links = generate_link_straight_line(cabinets, exchange)
+#     print('generate straight line links layer 3')
+#     exchange_sl_links = generate_link_straight_line(cabinets, exchange)
 
-    ##########################################################################################
-    # Add technology to network and process this into the network hierachy
-    print('add technology to postcode areas')
-    geojson_postcode_areas = add_technology_to_postcode_areas(
-        geojson_postcode_areas, lut_pcd_technology
-        )
+#     ##########################################################################################
+#     # Add technology to network and process this into the network hierachy
+#     print('add technology to postcode areas')
+#     geojson_postcode_areas = add_technology_to_postcode_areas(
+#         geojson_postcode_areas, lut_pcd_technology
+#         )
 
-    print('add technology to premises')
-    premises = add_technology_to_premises(premises, geojson_postcode_areas)
+#     print('add technology to premises')
+#     premises = add_technology_to_premises(premises, geojson_postcode_areas)
 
-    print('add technology to distributions')
-    distributions = add_technology_to_assets(distributions, premises)
+#     print('add technology to distributions')
+#     distributions = add_technology_to_assets(distributions, premises)
 
-    print('add technology to cabinets')
-    cabinets = add_technology_to_assets(cabinets, distributions)
+#     print('add technology to cabinets')
+#     cabinets = add_technology_to_assets(cabinets, distributions)
 
-    print('add technology to exchanges')
-    exchange = add_technology_to_assets(exchange, cabinets)
+#     print('add technology to exchanges')
+#     exchange = add_technology_to_assets(exchange, cabinets)
 
-    print('add technology to premises links (finaldrop)')
-    premises_links = add_technology_to_link(premises, premises_sl_links)
+#     print('add technology to premises links (finaldrop)')
+#     premises_links = add_technology_to_link(premises, premises_sl_links)
 
-    print('add technology to distribution links')
-    cabinets_sl_links = add_technology_to_link(distributions, cabinets_sl_links)
+#     print('add technology to distribution links')
+#     cabinets_sl_links = add_technology_to_link(distributions, cabinets_sl_links)
 
-    print('add technology to cabinet links')
-    exchange_sl_links = add_technology_to_link(cabinets, exchange_sl_links)
+#     print('add technology to cabinet links')
+#     exchange_sl_links = add_technology_to_link(cabinets, exchange_sl_links)
 
-    # Copy id to name (required for smif outputs)
-    print('copy id to name (distributions)')
-    distributions = copy_id_to_name(distributions)
+#     # Copy id to name (required for smif outputs)
+#     print('copy id to name (distributions)')
+#     distributions = copy_id_to_name(distributions)
 
-    print('copy id to name (cabinets)')
-    cabinets = copy_id_to_name(cabinets)
+#     print('copy id to name (cabinets)')
+#     cabinets = copy_id_to_name(cabinets)
 
-    print('aggregate premises data to distribution points')
-    premises_by_distribution_point = aggregate_premises_by_dist_point(premises, distributions)
+#     print('aggregate premises data to distribution points')
+#     premises_by_distribution_point = aggregate_premises_by_dist_point(premises, distributions)
 
-    print('aggregate link premises data to distribution points')
-    premises_links_by_distribution_point = aggregate_premises_links_by_dist_point(
-        premises_links
-        )
+#     print('aggregate link premises data to distribution points')
+#     premises_links_by_distribution_point = aggregate_premises_links_by_dist_point(
+#         premises_links
+#         )
 
-    ########
-    ### WRITE OUT
-    ###########_link##########################################################################
-####
-    # #    #  debug pupremises_links('write postcode_areas')
-    ######## write_shapefile(geojson_postcode_areas,  exchange_name, '_postcode_areas.shp')
+#     ########
+#     ### WRITE OUT
+#     ###########_link##########################################################################
+# ####
+#     # #    #  debug pupremises_links('write postcode_areas')
+#     ######## write_shapefile(geojson_postcode_areas,  exchange_name, '_postcode_areas.shp')
 
-    # print('write distribution_areas')
-    # write_shapefile(geojson_distribution_areas,  exchange_name, '_distribution_areas.shp')
+#     # print('write distribution_areas')
+#     # write_shapefile(geojson_distribution_areas,  exchange_name, '_distribution_areas.shp')
 
-    # print('write cabinet_areas')
-    # write_shapefile(geojson_cabinet_areas,  exchange_name, '_cabinet_areas.shp')
+#     # print('write cabinet_areas')
+#     # write_shapefile(geojson_cabinet_areas,  exchange_name, '_cabinet_areas.shp')
 
-    # print('write exchange_area')
-    # write_exchange_area =[]
-    # write_exchange_area.append(exchange_area)
-    # write_shapefile(write_exchange_area,  exchange_name, '_exchange_area.shp')
+#     # print('write exchange_area')
+#     # write_exchange_area =[]
+#     # write_exchange_area.append(exchange_area)
+#     # write_shapefile(write_exchange_area,  exchange_name, '_exchange_area.shp')
 
-    # Write assets
-    # print('write premises')
-    # # write_shapefile(premises,  exchange_name, 'assets_layer5_premises.shp')
-    # csv_writer(premises, exchange_name, 'assets_layer5_premises.csv')
+#     # Write assets
+#     # print('write premises')
+#     # # write_shapefile(premises,  exchange_name, 'assets_layer5_premises.shp')
+#     # csv_writer(premises, exchange_name, 'assets_layer5_premises.csv')
 
-    print('write premises by distribution point')
-    csv_writer(
-        premises_by_distribution_point, exchange_name, 'assets_distribution_points.csv', 0
-        )
+#     print('write premises by distribution point')
+#     csv_writer(
+#         premises_by_distribution_point, exchange_name, 'assets_distribution_points.csv', 0
+#         )
 
-    # # print('write distribution points')
-    # # write_shapefile(distributions,  exchange_name, 'assets_layer4_distributions.shp')
-    # csv_writer(distributions, exchange_name, 'assets_layer4_distributions.csv', 1)
+#     # # print('write distribution points')
+#     # # write_shapefile(distributions,  exchange_name, 'assets_layer4_distributions.shp')
+#     # csv_writer(distributions, exchange_name, 'assets_layer4_distributions.csv', 1)
 
-    print('write cabinets')
-    csv_writer(cabinets, exchange_name, 'assets_cabinets.csv', 1)
+#     print('write cabinets')
+#     csv_writer(cabinets, exchange_name, 'assets_cabinets.csv', 1)
 
-    print('write exchanges')
-    csv_writer(exchange, exchange_name, 'assets_exchange.csv', 1)
+#     print('write exchanges')
+#     csv_writer(exchange, exchange_name, 'assets_exchange.csv', 1)
 
-    # # Write links
-    # print('write links layer5')
-    # write_shapefile(premises_sp_links,  exchange_name, 'links_sp_layer5_premises.shp')
+#     # # Write links
+#     # print('write links layer5')
+#     # write_shapefile(premises_sp_links,  exchange_name, 'links_sp_layer5_premises.shp')
 
-    # print('write links layer4')
-    # write_shapefile(
-    # distributions_sp_links,  exchange_name, 'links_sp_layer4_distributions.shp'
-    # )
+#     # print('write links layer4')
+#     # write_shapefile(
+#     # distributions_sp_links,  exchange_name, 'links_sp_layer4_distributions.shp'
+#     # )
 
-    # print('write links layer3')
-    # write_shapefile(cabinets_sp_links,  exchange_name, 'links_sp_layer3_cabinets.shp')
+#     # print('write links layer3')
+#     # write_shapefile(cabinets_sp_links,  exchange_name, 'links_sp_layer3_cabinets.shp')
 
-    # # print('write links layer5')
-    # # write_shapefile(premises_sl_links,  exchange_name, 'links_sl_layer5_premises.shp')
-    # csv_writer(premises_sl_links, exchange_name, 'links_sl_layer5_premises.csv', 1)
+#     # # print('write links layer5')
+#     # # write_shapefile(premises_sl_links,  exchange_name, 'links_sl_layer5_premises.shp')
+#     # csv_writer(premises_sl_links, exchange_name, 'links_sl_layer5_premises.csv', 1)
 
-    # print('write aggregated links layer5')
-    # write_shapefile(premises_sl_links,  exchange_name, 'links_sl_layer5_premises.shp')
-    csv_writer(
-        premises_links_by_distribution_point, exchange_name,
-        'links_sl_distribution_points.csv', 0
-        )
+#     # print('write aggregated links layer5')
+#     # write_shapefile(premises_sl_links,  exchange_name, 'links_sl_layer5_premises.shp')
+#     csv_writer(
+#         premises_links_by_distribution_point, exchange_name,
+#         'links_sl_distribution_points.csv', 0
+#         )
 
-    # print('write links layer4')
-    # write_shapefile(cabinets_sl_links,  exchange_name, 'links_sl_layer4_distributions.shp')
-    csv_writer(cabinets_sl_links, exchange_name, 'links_sl_cabinets.csv', 1)
+#     # print('write links layer4')
+#     # write_shapefile(cabinets_sl_links,  exchange_name, 'links_sl_layer4_distributions.shp')
+#     csv_writer(cabinets_sl_links, exchange_name, 'links_sl_cabinets.csv', 1)
 
-    # print('write links layer3')
-    # write_shapefile(exchange_sl_links,  exchange_name, 'links_sl_layer3_cabinets.shp')
-    csv_writer(exchange_sl_links, exchange_name, 'links_sl_exchanges.csv', 1)
+#     # print('write links layer3')
+#     # write_shapefile(exchange_sl_links,  exchange_name, 'links_sl_layer3_cabinets.shp')
+#     csv_writer(exchange_sl_links, exchange_name, 'links_sl_exchanges.csv', 1)
 
-    print("script finished")
-    #print("script took {} minutes to complete".format(round((end - start)/60, 2)))
+#     print("script finished")
+#     #print("script took {} minutes to complete".format(round((end - start)/60, 2)))
