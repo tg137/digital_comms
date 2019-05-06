@@ -107,15 +107,12 @@ def read_premises_data(exchange_area):
             for path in pathlist:
                 if os.path.isfile(PATH):
                     for oa in lower_areas:
-                        print(oa)
                         if os.path.basename(path[:-4]) == oa:
                             with open(path, 'r') as system_file:
                                 reader = csv.DictReader(system_file)
                                 for line in reader:
-                                    print(line)
                                     geom = loads(line['geom'])
                                     geom_point = geom.representative_point()
-
                                     feature = {
                                         'type': 'Feature',
                                         'geometry': mapping(geom),
@@ -299,7 +296,7 @@ def read_pcd_to_cabinet_lut(exchange_abbr):
     return unique_ouput
 
 def find_intersecting_postcode_areas(exchange_abbr):
-
+    #'WSTOB'
     pcd_areas = []
 
     pathlist = glob.iglob(os.path.join(
@@ -343,16 +340,15 @@ def read_postcode_areas(exchange_area):
     intersecting_areas = list(set(
         find_intersecting_postcode_areas(exchange_area['properties']['id'])
         ))
-
+        
     for area in intersecting_areas:
         area = area.lower()
         with fiona.open(
             os.path.join(
-                DATA_RAW_SHAPES,'individual_postcode_areas_no_verticals',area + '.shp'
-                ), 'r'
-                ) as source:
+                DATA_RAW_SHAPES,'individual_postcode_areas_no_verticals',
+                area + '.shp'), 'r') as source:
             for postcode in source:
-                if exchange_geom.contains(shape(postcode['geometry'])):
+                if exchange_geom.intersects(shape(postcode['geometry'])):
                     pcd_areas.append({
                         'type': postcode['type'],
                         'geometry': postcode['geometry'],
