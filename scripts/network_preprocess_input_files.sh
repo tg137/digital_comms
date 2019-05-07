@@ -1,7 +1,8 @@
 #!/bin/bash
 . /opt/miniconda/etc/profile.d/conda.sh
 conda activate digital_comms
-python $(dirname $0)/network_preprocess_input_files.py $1
+python $(dirname $0)/network_preprocess_input_files.py $1  'False' &> \
+/soge-home/projects/mistral/nismod/digital_comms/data/intermediate/intermediate_exchanges/$1/log.txt
 
 # # source activate digital_comms
 # cd /soge-home/projects/mistral/nismod/digital_comms/
