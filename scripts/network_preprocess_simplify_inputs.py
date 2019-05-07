@@ -250,7 +250,7 @@ def read_exchange_areas():
 
     with fiona.open(
         os.path.join(
-            DATA_RAW_SHAPES, 'all_exchange_areas', '_exchange_areas.shp')
+            DATA_RAW_SHAPES, 'all_exchange_areas', '_exchange_areas_fixed.shp')
             , 'r'
             ) as source:
             for feature in source:
@@ -266,7 +266,8 @@ def read_exchange_areas():
             return exchange_areas
 
 def load_exchange_properties():
-    """Read all exchange properties data
+    """
+    Read all exchange properties data
 
     Data Schema
     -----------
@@ -276,7 +277,9 @@ def load_exchange_properties():
         Unique exchange id
 
     """
-    exchange_postcodes_path = os.path.join(DATA_RAW_INPUTS, 'exchange_geotypes', 'exchange_properties.csv')
+    exchange_postcodes_path = os.path.join(
+        DATA_RAW_INPUTS, 'exchange_geotypes', 'exchange_properties.csv'
+        )
 
     output = []
 
@@ -311,10 +314,12 @@ def add_properties_to_exchanges(exchanges, properties):
     """
 
     output = []
+    completed_exchanges = []
 
     for exchange in exchanges:
         for exchange_property in properties:
             if exchange['properties']['id'] == exchange_property['id']:
+                completed_exchanges.append(exchange['properties']['id'])
                 output.append({
                     'type': exchange['type'],
                     'geometry': exchange['geometry'],
@@ -327,6 +332,23 @@ def add_properties_to_exchanges(exchanges, properties):
                     }
                 })
 
+    missing_exchanges = []
+
+    for exchange in exchanges:
+        if exchange['properties']['id'] not in completed_exchanges:
+            missing_exchanges.append(exchange['properties']['id'])
+            output.append({
+                    'type': exchange['type'],
+                    'geometry': exchange['geometry'],
+                    'properties': {
+                        'id': exchange['properties']['id'],
+                        'postcode': 'Not Known',
+                        'geotype': 'Not Known',
+                        'prems_over': 'Not Known',
+                        'prems_under': 'Not Known',
+                    }
+                })
+    print('missing exchanges include {}'.format(missing_exchanges))
     return output
 
 def write_shapefile(data, directory, id):
@@ -352,8 +374,13 @@ def write_shapefile(data, directory, id):
     for area in data:
         filename = area['properties'][id].replace('/', '')
         # Write all elements to output file
-        with fiona.open(os.path.join(folder_directory, filename + '.shp'), 'w', driver=sink_driver, crs=sink_crs, schema=sink_schema) as sink:
-            sink.write(area)
+        try:
+            with fiona.open(
+                os.path.join(folder_directory, filename + '.shp'), 'w',
+                driver=sink_driver, crs=sink_crs, schema=sink_schema) as sink:
+                sink.write(area)
+        except:
+            ValueError(filename)
 
 #####################################################################################
 # 4) generate single set of postcode areas from postcode sectors
@@ -664,13 +691,11 @@ def remove_verticals(path):
 
 def read_postcode_areas():
 
-    directory = os.path.join(DATA_RAW_SHAPES, 'postcode_areas')
-    pathlist = glob.iglob(os.path.join(directory + '/*.shp'), recursive=True)
+    path = os.path.join(DATA_RAW_SHAPES, 'postcode_areas', '_postcode_areas_fixed_up.shp')
 
-    for path in pathlist:
-        with fiona.open(path, 'r') as source:
-            for feature in source:
-                yield feature
+    with fiona.open(path, 'r') as source:
+        for feature in source:
+            yield feature
 
 def intersect_pcd_areas_and_exchanges(exchanges, areas):
 
@@ -681,14 +706,13 @@ def intersect_pcd_areas_and_exchanges(exchanges, areas):
         for i, exchange in enumerate(exchanges)
     )
 
-    for area in areas:
-        print(area['properties'])
+    for area in tqdm(areas):
         for n in idx.intersection((shape(area['geometry']).bounds), objects=True):
             area_shape = shape(area['geometry'])
             exchange_shape = shape(n.object['geometry'])
             if area_shape.intersects(exchange_shape):
                 exchange_to_pcd_area_lut[n.object['properties']['id']].append({
-                    'postcode_area': area['properties']['postcode_a'],
+                    'postcode_area': area['properties']['pcd_area'],
                     })
 
     return exchange_to_pcd_area_lut
@@ -813,13 +837,18 @@ def write_premises_shapefile(data, path):
         'properties': OrderedDict(prop_schema)
     }
 
+    # Create path
+    folder_directory = os.path.join(DATA_INTERMEDIATE, 'premises_by_exchange')
+    if not os.path.exists(folder_directory):
+        os.makedirs(folder_directory)
+
     # Write all elements to output file
     with fiona.open(path, 'w', driver=sink_driver, crs=sink_crs, schema=sink_schema) as sink:
         [sink.write(feature) for feature in data]
 
 def read_premises_by_exchange(exchange_areas):
 
-    for exchange in exchange_areas:
+    for exchange in tqdm(exchange_areas):
         exchange_id = exchange['properties']['id'].replace("/", "")
         PATH = os.path.join(DATA_INTERMEDIATE, 'premises_by_exchange', exchange_id + '.shp')
         if not os.path.isfile(PATH):
@@ -996,22 +1025,21 @@ def write_to_csv(data, folder, file_prefix, fieldnames):
 # fieldnames = ['postcode','cabinet','exchange_only_flag']
 # write_to_csv(pcd_to_cabinet_data, 'lut_pcd_to_cabinet_by_exchange', 'pcd_to_cab_', fieldnames)
 
-# # 3) add necessary properties (postcode) to exchange polygons
+# # # 3) add necessary properties (postcode) to exchange polygons
 exchange_areas = read_exchange_areas()
-
 # exchange_properties = load_exchange_properties()
 # exchange_areas = add_properties_to_exchanges(exchange_areas, exchange_properties)
 # write_shapefile(exchange_areas, 'individual_exchange_areas', 'id')
 
 # 4) generate single set of postcode areas from postcode sectors
-run_postcode_area_generation()
+# run_postcode_area_generation()
 
 # # 5) remove verticals from postcode areas and write out individually
 # for path in pathlist:
 #     remove_verticals(path)
 #     print('completed {}'.format(os.path.basename(path)))
 
-# # 6) intersect postcode_areas with exchanges to get exchange_to_pcd_area_lut
+# 6) intersect postcode_areas with exchanges to get exchange_to_pcd_area_lut
 # postcode_areas = read_postcode_areas()
 # lut = intersect_pcd_areas_and_exchanges(exchange_areas, postcode_areas)
 # fieldnames = ['postcode_area']
@@ -1032,16 +1060,16 @@ run_postcode_area_generation()
 #         if exchange['properties']['id'] == exchange_id:
 #             yield exchange
 
-# # # 8) read premises by exchange and export
-# read_premises_by_exchange(exchange_areas)
+# # 8) read premises by exchange and export
+read_premises_by_exchange(exchange_areas)
 
-# # 9) find problem exchanges and export
-# problem_exchanges = find_problem_exchanges(exchange_areas)
-# fieldnames = ['problem_exchange']
-# write_to_csv(problem_exchanges, 'problem_exchanges', '', fieldnames)
-# problem_exchange_shapes = get_problem_exchange_shapes(exchange_areas, problem_exchanges)
-# PC_OUT_PATH = os.path.join(DATA_INTERMEDIATE, 'problem_exchanges', 'problem_exchanges_2.shp')
-# write_single_exchange_shapefile(problem_exchange_shapes, PC_OUT_PATH)
+# 9) find problem exchanges and export
+problem_exchanges = find_problem_exchanges(exchange_areas)
+fieldnames = ['problem_exchange']
+write_to_csv(problem_exchanges, 'problem_exchanges', '', fieldnames)
+problem_exchange_shapes = get_problem_exchange_shapes(exchange_areas, problem_exchanges)
+PC_OUT_PATH = os.path.join(DATA_INTERMEDIATE, 'problem_exchanges', 'problem_exchanges_2.shp')
+write_single_exchange_shapefile(problem_exchange_shapes, PC_OUT_PATH)
 
 # # 10) get OA to exchange LUT and export
 # oa_to_ex_lut, missing_exchanges = get_oa_to_exchange_lut(exchange_areas)
